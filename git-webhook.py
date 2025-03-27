@@ -113,7 +113,9 @@ def webhook():
             for path, branch_sub in submodules.items():
                 status_out_sub = status(container, f"/home/container/server-data/{path}")
                 if not status_out_sub.stdout.strip():
-                    logging.info(f"{container}: No changes in {path}, skipping")
+                    logging.info(f"{container}: No changes in {path}, only pulling")
+                    pull(container, f"/home/container/server-data/{path}", branch_sub)
+                    logging.info(f"{container}: Auto pull {path} successful in container")
                     continue
                 commit(container, f"/home/container/server-data/{path}")
                 logging.info(f"{container}: Auto commit {path} successful in container")
