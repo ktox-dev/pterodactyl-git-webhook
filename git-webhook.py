@@ -105,7 +105,7 @@ def webhook():
     for commit1 in payload["commits"]:
         if "Auto-commit by webhook" in commit1["message"]:
             logging.info("Auto-commit by webhook detected")
-            return "Auto-commit by webhook", 200
+            return "Auto-commit by webhook", 202
     
     for container, branch in containers.items():
         if container == "fbb6360b-1f8f-4768-a39e-340daf0eac6f":
