@@ -8,6 +8,7 @@ import ipaddress
 containers = {
     "34bee3f5-fb2b-4bab-b45e-c303b1d15137": "main",
     "fbb6360b-1f8f-4768-a39e-340daf0eac6f": "dev",
+    "51c6374c-c9ff-49bb-90b8-c68d1326fabe": "dev",
 }
 
 submodules = {
@@ -134,6 +135,17 @@ def webhook():
             push(container, "/home/container/server-data", branch)
             logging.info(f"{container}: Auto push successful in container")
         elif container == "34bee3f5-fb2b-4bab-b45e-c303b1d15137":
+            status_out = status(container, "/home/container/server-data")
+            if status_out.stdout.strip():
+                reset(container)
+                logging.info(f"{container}: Reset successful in container")
+            pull(container, "/home/container/server-data", branch)
+            logging.info(f"{container}: Git pull successful in container")
+            res_sub = submodule_update_fixed(container)
+            if isinstance(res_sub, tuple):  # an error was returned
+                return res_sub
+            logging.info(f"{container}: Submodules updated using specified branch in container")
+        elif container == "51c6374c-c9ff-49bb-90b8-c68d1326fabe":
             status_out = status(container, "/home/container/server-data")
             if status_out.stdout.strip():
                 reset(container)
