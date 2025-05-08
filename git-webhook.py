@@ -3,19 +3,27 @@ import subprocess
 import logging
 import requests
 import ipaddress
+from dotenv import load_dotenv
+import os
+from collections import defaultdict
 
-# Set Containers to run pull on
-containers = {
-    "34bee3f5-fb2b-4bab-b45e-c303b1d15137": "main",
-    "fbb6360b-1f8f-4768-a39e-340daf0eac6f": "dev",
-    "51c6374c-c9ff-49bb-90b8-c68d1326fabe": "dev",
-}
+# Load environment variables
+load_dotenv()
 
-submodules = {
-    "resources/[VL_Scripts]/[Cars]": "main",
-    "resources/[VL_Scripts]/[Kleidung]": "main",
-    "resources/[VL_Scripts]/[MLO]": "main",
-}
+# Parse containers from environment variables
+containers = {}
+for key, value in os.environ.items():
+    if key.startswith('CONTAINER_'):
+        container_id = key.replace('CONTAINER_', '')
+        containers[container_id] = value
+
+# Parse submodules from environment variables (per container)
+submodules = defaultdict(dict)
+for key, value in os.environ.items():
+    if key.startswith('SUBMODULE_'):
+        _, container_id, name = key.split('_', 2)
+        path, branch = value.split(':')
+        submodules[container_id][path] = branch
 
 # Set up logging to file
 logging.basicConfig(filename='/home/github/pterodactyl-git-webhook/webhook.log', level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
@@ -108,21 +116,30 @@ def webhook():
         return "Auto-commit by webhook", 202
     
     for container, branch in containers.items():
-        if container == "fbb6360b-1f8f-4768-a39e-340daf0eac6f":
+        if branch == "dev":
             # Auto commit, pull and push for submodules
-            for path, branch_sub in submodules.items():
+            container_submodules = submodules.get(container, {})
+            for path, branch_sub in container_submodules.items():
+                
                 status_out_sub = status(container, f"/home/container/server-data/{path}")
+                
                 if not status_out_sub.stdout.strip():
                     logging.info(f"{container}: No changes in {path}, only pulling")
                     pull(container, f"/home/container/server-data/{path}", branch_sub)
+                    
                     logging.info(f"{container}: Auto pull {path} successful in container")
+                    
                     continue
+                
                 commit(container, f"/home/container/server-data/{path}")
                 logging.info(f"{container}: Auto commit {path} successful in container")
+                
                 pull(container, f"/home/container/server-data/{path}", branch_sub)
                 logging.info(f"{container}: Auto pull {path} successful in container")
+                
                 push_submodule(container, f"/home/container/server-data/{path}", branch_sub)
                 logging.info(f"{container}: Auto push {path} successful in container")
+            
             # Use newest commits in submodules
             res_sub = submodule_update(container)
             if isinstance(res_sub, tuple):  # an error was returned
@@ -130,32 +147,29 @@ def webhook():
             
             commit(container, "/home/container/server-data")
             logging.info(f"{container}: Auto commit successful in container")
+            
             pull(container, "/home/container/server-data", branch)
             logging.info(f"{container}: Auto pull successful in container")
+            
             push(container, "/home/container/server-data", branch)
             logging.info(f"{container}: Auto push successful in container")
-        elif container == "34bee3f5-fb2b-4bab-b45e-c303b1d15137":
+
+        elif branch == "main":
             status_out = status(container, "/home/container/server-data")
+            
             if status_out.stdout.strip():
                 reset(container)
                 logging.info(f"{container}: Reset successful in container")
+            
             pull(container, "/home/container/server-data", branch)
             logging.info(f"{container}: Git pull successful in container")
+            
             res_sub = submodule_update_fixed(container)
             if isinstance(res_sub, tuple):  # an error was returned
                 return res_sub
+            
             logging.info(f"{container}: Submodules updated using specified branch in container")
-        elif container == "51c6374c-c9ff-49bb-90b8-c68d1326fabe":
-            status_out = status(container, "/home/container/server-data")
-            if status_out.stdout.strip():
-                reset(container)
-                logging.info(f"{container}: Reset successful in container")
-            pull(container, "/home/container/server-data", branch)
-            logging.info(f"{container}: Git pull successful in container")
-            res_sub = submodule_update_fixed(container)
-            if isinstance(res_sub, tuple):  # an error was returned
-                return res_sub
-            logging.info(f"{container}: Submodules updated using specified branch in container")
+    
     logging.info("Operations successful for all containers")
     return "OK", 200
 
