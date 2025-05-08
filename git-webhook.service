@@ -1,0 +1,13 @@
+[Unit]
+Description=Git Webhook Service
+After=network.target
+
+[Service]
+User=git-webhook
+Group=docker
+WorkingDirectory=/home/github/pterodactyl-git-webhook
+ExecStart=/home/github/pterodactyl-git-webhook/venv/bin/python3 /home/github/pterodactyl-git-webhook/git-webhook.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

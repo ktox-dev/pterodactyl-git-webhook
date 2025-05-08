@@ -18,7 +18,7 @@ submodules = {
 }
 
 # Set up logging to file
-logging.basicConfig(filename='/home/github/webhook.log', level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+logging.basicConfig(filename='/home/github/pterodactyl-git-webhook/webhook.log', level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 app = Flask(__name__)
 
