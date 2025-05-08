@@ -90,6 +90,9 @@ def submodule_update_fixed(container):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    logging.info("Received webhook request from "+ forwarded_for.split(',')[1])
+    real_ip = forwarded_for.split(', ')[1] if forwarded_for else request.headers.get('X-Real-IP', request.remote_addr)
 
     # Check if request is from GitHub.
     try:
@@ -99,9 +102,9 @@ def webhook():
         logging.error("Failed to retrieve GitHub hooks IPs: %s", e)
         return "Error retrieving GitHub meta information", 500
 
-    remote_ip = ipaddress.ip_address(request.remote_addr)
+    remote_ip = ipaddress.ip_address(real_ip)
     if not any(remote_ip in ipaddress.ip_network(ip_range) for ip_range in valid_ips):
-        logging.error("Unauthorized request from IP: %s", request.remote_addr)
+        logging.error("Unauthorized request from IP: %s", real_ip)
         return "Unauthorized IP", 403
     
     # Check if github request is a push event.
@@ -111,6 +114,9 @@ def webhook():
     
     # Check if commit message contains "Auto-commit by webhook"
     payload = request.json
+    if not payload or "head_commit" not in payload or not payload["head_commit"] or "message" not in payload["head_commit"]:
+        logging.error("Invalid payload received")
+        return "Invalid Payload", 400
     if "Auto-commit by webhook" in payload["head_commit"]["message"]:
         logging.info("Auto-commit by webhook detected")
         return "Auto-commit by webhook", 202
@@ -174,4 +180,4 @@ def webhook():
     return "OK", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="172.21.0.1", port=5000)
