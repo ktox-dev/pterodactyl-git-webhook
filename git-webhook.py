@@ -131,6 +131,10 @@ class GitOperations:
     
     def commit(self, container: str, path: str, message: str = "Auto-commit by webhook") -> Tuple[bool, str]:
         """Commit changes in the repository."""
+        # First check if there are any changes to commit
+        if not self.has_changes(container, path):
+            return True, "No changes to commit"
+        
         # Ensure Git user is configured before committing
         success, msg = self.setup_git_user(container, path)
         if not success:
@@ -272,7 +276,12 @@ class WebhookProcessor:
                 success, msg = self.git_ops.commit(container, full_path)
                 if not success:
                     return False, f"Submodule commit failed: {msg}"
-                logging.info(f"{container}: Auto commit {path} successful")
+                
+                # Log the commit result appropriately
+                if "No changes to commit" in msg:
+                    logging.info(f"{container}: {path} - {msg}")
+                else:
+                    logging.info(f"{container}: Auto commit {path} successful")
                 
                 success, msg = self.git_ops.pull(container, full_path, branch_sub)
                 if not success:
@@ -296,7 +305,12 @@ class WebhookProcessor:
             success, msg = self.git_ops.commit(container, self.config.repos_dir)
             if not success:
                 return False, f"Main repo commit failed: {msg}"
-            logging.info(f"{container}: Auto commit successful")
+            
+            # Log the commit result appropriately
+            if "No changes to commit" in msg:
+                logging.info(f"{container}: {msg}")
+            else:
+                logging.info(f"{container}: Auto commit successful")
             
             success, msg = self.git_ops.pull(container, self.config.repos_dir, branch)
             if not success:
