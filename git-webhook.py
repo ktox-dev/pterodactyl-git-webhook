@@ -1,9 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify # type: ignore
 import subprocess
 import logging
 import requests
 import ipaddress
-from dotenv import load_dotenv
+from dotenv import load_dotenv # type: ignore
 import os
 from collections import defaultdict
 from typing import Dict, Tuple, Optional, Any
