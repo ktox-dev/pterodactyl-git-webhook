@@ -162,15 +162,24 @@ class GitOperations:
             logging.error(error_msg)
             return False, error_msg
         return True, "Push successful"
-    
-    def reset_hard(self, container: str, path: str) -> Tuple[bool, str]:
-        """Reset repository to HEAD, discarding local changes."""
-        result = self.run_docker_command(container, "git", "-C", path, "reset", "--hard", "HEAD")
-        if result.returncode != 0:
-            error_msg = f"Reset failed in container {container}: {result.stderr}"
+
+    def reset_hard(self, container: str, path: str, branch: str) -> Tuple[bool, str]:
+        """Reset repository to HEAD, discarding local changes and untracked files."""
+        # First reset to HEAD (discards staged and unstaged changes)
+        result_reset = self.run_docker_command(container, "git", "-C", path, "reset", "--hard", "origin/" + branch)
+        if result_reset.returncode != 0:
+            error_msg = f"Reset failed in container {container}: {result_reset.stderr}"
             logging.error(error_msg)
             return False, error_msg
-        return True, "Reset successful"
+        
+        # Then clean untracked files and directories
+        result_clean = self.run_docker_command(container, "git", "-C", path, "clean", "-fd")
+        if result_clean.returncode != 0:
+            error_msg = f"Clean failed in container {container}: {result_clean.stderr}"
+            logging.error(error_msg)
+            return False, error_msg
+        
+        return True, "Reset and clean successful"
     
     def submodule_update(self, container: str, path: str, use_remote: bool = True) -> Tuple[bool, str]:
         """Update submodules in the repository."""
@@ -334,7 +343,7 @@ class WebhookProcessor:
         try:
             # Check for local changes and reset if necessary
             if self.git_ops.has_changes(container, self.config.repos_dir):
-                success, msg = self.git_ops.reset_hard(container, self.config.repos_dir)
+                success, msg = self.git_ops.reset_hard(container, self.config.repos_dir, branch)
                 if not success:
                     return False, f"Reset failed: {msg}"
                 logging.info(f"{container}: Reset successful")
