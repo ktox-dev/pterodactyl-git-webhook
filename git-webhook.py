@@ -103,8 +103,35 @@ class GitOperations:
     
     def run_docker_command(self, container: str, *args) -> subprocess.CompletedProcess:
         """Execute a command inside a Docker container."""
+        # Try to run as the container's default user first
         cmd = ["docker", "exec", container] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # If there's an error and it contains ownership issues, 
+        if (result.returncode != 0 and result.stderr and "dubious ownership" in result.stderr):
+            
+            logging.warning(f"ownership error detected, declaring as safe directory {container}")
+            
+            # Declare repository as safe first
+            safe_cmd = ["docker", "exec", container, "git", "config", "--global", "--add", "safe.directory", self.repos_dir]
+            safe_result = subprocess.run(safe_cmd, capture_output=True, text=True)
+            if safe_result.returncode != 0:
+                logging.warning(f"Could not declare safe repository: {safe_result.stderr}")
+            
+            # Retry the original command
+            cmd = ["docker", "exec", container] + list(args)
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        elif (result.returncode != 0 and result.stderr and "permission denied" in result.stderr):
+
+            logging.warning(f"permissions error detected, applying default user and group 988 to {self.repos_dir} in container {container}")
+
+            # Apply default user and group 988 to the repository directory
+            fix_cmd = ["docker", "exec", "--user", "root", container, "chown", "-R", "988:988", self.repos_dir]
+            fix_result = subprocess.run(fix_cmd, capture_output=True, text=True)
+            if fix_result.returncode != 0:
+                logging.warning(f"Could not apply ownership fix: {fix_result.stderr}")
+        
+        return result
     
     def setup_git_user(self, container: str, path: str) -> Tuple[bool, str]:
         """Set up Git user configuration in the container."""
