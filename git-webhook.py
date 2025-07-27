@@ -129,6 +129,13 @@ class GitOperations:
         result = self.run_docker_command(container, "git", "-C", path, "status", "--porcelain", "-uno")
         return bool(result.stdout.strip()) and result.returncode == 0
     
+    def add_all(self, container: str, path: str) -> Tuple[bool, str]:
+        """Add all changes in the repository."""
+        result = self.run_docker_command(container, "git", "-C", path, "add", "--all")
+        if result.returncode != 0:
+            return False, f"Add failed: {result.stderr}"
+        return True, "All changes added successfully"
+    
     def commit(self, container: str, path: str, message: str = "Auto-commit by webhook") -> Tuple[bool, str]:
         """Commit changes in the repository."""
         # First check if there are any changes to commit
@@ -140,6 +147,11 @@ class GitOperations:
         if not success:
             return False, f"Git user setup failed: {msg}"
         
+        # Add all changes before committing
+        success, msg = self.add_all(container, path)
+        if not success:
+            return False, f"Add failed: {msg}"
+
         result = self.run_docker_command(container, "git", "-C", path, "commit", "-am", message)
         if result.returncode != 0:
             return False, f"Commit failed: {result.stderr}"
