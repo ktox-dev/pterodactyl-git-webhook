@@ -130,6 +130,19 @@ class GitOperations:
             fix_result = subprocess.run(fix_cmd, capture_output=True, text=True)
             if fix_result.returncode != 0:
                 logging.warning(f"Could not apply ownership fix: {fix_result.stderr}")
+        elif (result.returncode != 0 and result.stderr and "Need to specify how to reconcile divergent branches" in result.stderr):
+            
+            logging.warning(f"Divergent branches detected, configuring pull strategy for {container}")
+            
+            # Set pull strategy to rebase
+            pull_config_cmd = ["docker", "exec", container, "git", "config", "--global", "pull.rebase", "true"]
+            pull_result = subprocess.run(pull_config_cmd, capture_output=True, text=True)
+            if pull_result.returncode != 0:
+                logging.warning(f"Could not set pull strategy: {pull_result.stderr}")
+            
+            # Retry the original command
+            cmd = ["docker", "exec", container] + list(args)
+            result = subprocess.run(cmd, capture_output=True, text=True)
         
         return result
     
