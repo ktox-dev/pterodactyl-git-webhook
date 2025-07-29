@@ -8,6 +8,8 @@ import os
 from collections import defaultdict
 from typing import Dict, Tuple, Optional, Any
 from dataclasses import dataclass
+import threading
+from queue import Queue
 
 # Load environment variables
 load_dotenv()
@@ -439,6 +441,45 @@ class WebhookProcessor:
 
 # Initialize the webhook processor
 webhook_processor = WebhookProcessor(config)
+
+# Initialize a queue for processing requests
+request_queue = Queue()
+
+def process_requests():
+    while True:
+        # Get the next request from the queue
+        request_data = request_queue.get()
+        try:
+            real_ip, payload = request_data
+            logging.info(f"Processing webhook request from {real_ip}")
+
+            # Validate GitHub IP
+            if not GitHubValidator.is_github_ip(real_ip, timeout=config.github_api_timeout):
+                logging.error(f"Unauthorized request from IP: {real_ip}")
+                continue
+
+            # Check for auto-commit to avoid loops
+            if GitHubValidator.is_auto_commit(payload):
+                logging.info("Auto-commit by webhook detected, skipping processing")
+                continue
+
+            # Process all containers
+            success, message = webhook_processor.process_all_containers()
+
+            if success:
+                logging.info("Operations successful for all containers")
+            else:
+                logging.error(f"Container processing failed: {message}")
+        except Exception as e:
+            logging.error(f"Unexpected error in request processing: {str(e)}")
+        finally:
+            # Mark the task as done
+            request_queue.task_done()
+
+# Start the worker thread
+worker_thread = threading.Thread(target=process_requests, daemon=True)
+worker_thread.start()
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """Handle GitHub webhook requests."""
@@ -446,12 +487,7 @@ def webhook():
         # Extract and log the real IP
         real_ip = GitHubValidator.get_real_ip(request)
         logging.info(f"Received webhook request from {real_ip}")
-        
-        # Validate GitHub IP
-        if not GitHubValidator.is_github_ip(real_ip, timeout=config.github_api_timeout):
-            logging.error(f"Unauthorized request from IP: {real_ip}")
-            return jsonify({"error": "Unauthorized IP"}), 403
-        
+
         # Check if it's a push event
         if not GitHubValidator.is_push_event(request):
             logging.info("Received non-push event")
@@ -462,22 +498,12 @@ def webhook():
         if not payload:
             logging.error("Invalid or missing payload")
             return jsonify({"error": "Invalid payload"}), 400
-        
-        # Check for auto-commit to avoid loops
-        if GitHubValidator.is_auto_commit(payload):
-            logging.info("Auto-commit by webhook detected, skipping processing")
-            return jsonify({"message": "Auto-commit detected, skipping"}), 202
-        
-        # Process all containers
-        success, message = webhook_processor.process_all_containers()
-        
-        if success:
-            logging.info("Operations successful for all containers")
-            return jsonify({"message": "Success"}), 200
-        else:
-            logging.error(f"Container processing failed: {message}")
-            return jsonify({"error": message}), 500
-            
+
+        # Add the request to the queue
+        request_queue.put((real_ip, payload))
+        logging.info("Request added to the queue")
+        return jsonify({"message": "Request is being processed"}), 202
+
     except Exception as e:
         error_msg = f"Unexpected error in webhook handler: {str(e)}"
         logging.error(error_msg)
