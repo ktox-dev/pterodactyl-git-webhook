@@ -5,22 +5,52 @@ import requests
 import ipaddress
 from dotenv import load_dotenv # type: ignore
 import os
+import yaml # type: ignore
 from collections import defaultdict
-from typing import Dict, Tuple, Optional, Any
-from dataclasses import dataclass
+from typing import Dict, Tuple, Optional, Any, List
+from dataclasses import dataclass, field
 import threading
 from queue import Queue
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
+
+@dataclass
+class Submodule:
+    """Represents a Git submodule configuration."""
+    path: str
+    branch: str
+
+@dataclass
+class Workflow:
+    """Represents a workflow configuration."""
+    description: str
+    reset_on_changes: bool = False
+    pull: bool = True
+    commit: bool = False
+    push: bool = False
+    submodule_update: bool = True
+    submodule_remote: bool = False
+    submodule_commit_push: bool = False
+
+@dataclass
+class Container:
+    """Represents a container configuration."""
+    id: str
+    name: str
+    branch: str
+    workflow: str
+    repos_dir: str
+    submodules: List[Submodule] = field(default_factory=list)
 
 @dataclass
 class Config:
     """Configuration class to hold all application settings."""
     current_dir: str
     repos_dir: str
-    containers: Dict[str, str]
-    submodules: Dict[str, Dict[str, str]]
+    containers: List[Container]
+    workflows: Dict[str, Workflow]
     flask_host: str = "0.0.0.0"
     flask_port: int = 5000
     flask_debug: bool = False
@@ -30,31 +60,83 @@ class Config:
     git_user_name: str = "Git Webhook Bot"
     git_user_email: str = "webhook@example.com"
     health_check_enabled: bool = True
+    config_file: str = "config.yaml"
+    commit_message_template: str = "Auto-commit by webhook"
+    max_concurrent_containers: int = 5
+    container_timeout: int = 300
     
     @classmethod
-    def from_environment(cls) -> 'Config':
+    def from_environment_and_file(cls) -> 'Config':
+        """Create configuration from environment variables and YAML file."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        repos_dir = os.environ.get('REPOS_DIR', '/home/container/server-data')
         
-        # Parse containers from environment variables
-        containers = {}
-        for key, value in os.environ.items():
-            if key.startswith('CONTAINER_'):
-                container_id = key.replace('CONTAINER_', '')
-                containers[container_id] = value
+        # Load basic settings from environment
+        config_file = os.environ.get('CONFIG_FILE', 'config.yaml')
+        config_path = os.path.join(current_dir, config_file)
         
-        # Parse submodules from environment variables (per container)
-        submodules = defaultdict(dict)
-        for key, value in os.environ.items():
-            if key.startswith('SUBMODULE_'):
-                try:
-                    _, container_id, name = key.split('_', 2)
-                    path, branch = value.split(':')
-                    submodules[container_id][path] = branch
-                except ValueError:
-                    logging.warning(f"Invalid submodule configuration: {key}={value}")
+        # Default repositories directory
+        default_repos_dir = os.environ.get('REPOS_DIR', '/home/container/server-data')
         
-        # Optional configuration with defaults
+        # Try to load YAML configuration
+        containers = []
+        workflows = {}
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    yaml_config = yaml.safe_load(f) or {}
+                
+                # Load workflows
+                yaml_workflows = yaml_config.get('workflows', {})
+                for name, workflow_data in yaml_workflows.items():
+                    workflows[name] = Workflow(
+                        description=workflow_data.get('description', ''),
+                        reset_on_changes=workflow_data.get('reset_on_changes', False),
+                        pull=workflow_data.get('pull', True),
+                        commit=workflow_data.get('commit', False),
+                        push=workflow_data.get('push', False),
+                        submodule_update=workflow_data.get('submodule_update', True),
+                        submodule_remote=workflow_data.get('submodule_remote', False),
+                        submodule_commit_push=workflow_data.get('submodule_commit_push', False)
+                    )
+                
+                # Load containers
+                yaml_containers = yaml_config.get('containers', [])
+                for container_data in yaml_containers:
+                    submodules = []
+                    for sub_data in container_data.get('submodules', []):
+                        submodules.append(Submodule(
+                            path=sub_data['path'],
+                            branch=sub_data['branch']
+                        ))
+                    
+                    container = Container(
+                        id=container_data['id'],
+                        name=container_data.get('name', container_data['id']),
+                        branch=container_data['branch'],
+                        workflow=container_data['workflow'],
+                        repos_dir=container_data.get('repos_dir', default_repos_dir),
+                        submodules=submodules
+                    )
+                    containers.append(container)
+                
+                # Load global settings from YAML
+                yaml_settings = yaml_config.get('settings', {})
+                if 'default_repos_dir' in yaml_settings:
+                    default_repos_dir = yaml_settings['default_repos_dir']
+                
+                logging.info(f"Loaded configuration from {config_path}")
+                logging.info(f"Found {len(containers)} containers and {len(workflows)} workflows")
+                
+            except Exception as e:
+                logging.warning(f"Failed to load YAML config from {config_path}: {e}")
+                logging.info("Falling back to environment variable configuration")
+                containers, workflows = cls._load_legacy_env_config()
+        else:
+            logging.info(f"No config file found at {config_path}, using environment variables")
+            containers, workflows = cls._load_legacy_env_config()
+        
+        # Load Flask and other settings from environment (these override YAML)
         flask_host = os.environ.get('FLASK_HOST', '0.0.0.0')
         flask_port = int(os.environ.get('FLASK_PORT', '5000'))
         flask_debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
@@ -64,12 +146,15 @@ class Config:
         git_user_name = os.environ.get('GIT_USER_NAME', 'Git Webhook Bot')
         git_user_email = os.environ.get('GIT_USER_EMAIL', 'webhook@example.com')
         health_check_enabled = os.environ.get('HEALTH_CHECK_ENABLED', 'true').lower() == 'true'
+        commit_message_template = os.environ.get('COMMIT_MESSAGE_TEMPLATE', 'Auto-commit by webhook')
+        max_concurrent_containers = int(os.environ.get('MAX_CONCURRENT_CONTAINERS', '5'))
+        container_timeout = int(os.environ.get('CONTAINER_TIMEOUT', '300'))
         
         return cls(
             current_dir=current_dir,
-            repos_dir=repos_dir,
+            repos_dir=default_repos_dir,
             containers=containers,
-            submodules=dict(submodules),
+            workflows=workflows,
             flask_host=flask_host,
             flask_port=flask_port,
             flask_debug=flask_debug,
@@ -78,11 +163,125 @@ class Config:
             github_api_timeout=github_api_timeout,
             git_user_name=git_user_name,
             git_user_email=git_user_email,
-            health_check_enabled=health_check_enabled
+            health_check_enabled=health_check_enabled,
+            config_file=config_file,
+            commit_message_template=commit_message_template,
+            max_concurrent_containers=max_concurrent_containers,
+            container_timeout=container_timeout
         )
+    
+    @classmethod
+    def _load_legacy_env_config(cls) -> Tuple[List[Container], Dict[str, Workflow]]:
+        """Load configuration from legacy environment variables."""
+        containers = []
+        
+        # Default workflows for backward compatibility
+        workflows = {
+            'main': Workflow(
+                description="Legacy main branch workflow",
+                reset_on_changes=True,
+                pull=True,
+                commit=False,
+                push=False,
+                submodule_update=True,
+                submodule_remote=False
+            ),
+            'dev': Workflow(
+                description="Legacy dev branch workflow",
+                reset_on_changes=False,
+                pull=True,
+                commit=True,
+                push=True,
+                submodule_update=True,
+                submodule_remote=True,
+                submodule_commit_push=True
+            )
+        }
+        
+        # Parse legacy containers from environment variables
+        container_configs = {}
+        for key, value in os.environ.items():
+            if key.startswith('CONTAINER_'):
+                container_id = key.replace('CONTAINER_', '')
+                container_configs[container_id] = value
+        
+        # Parse legacy submodules
+        submodules_by_container = defaultdict(list)
+        for key, value in os.environ.items():
+            if key.startswith('SUBMODULE_'):
+                try:
+                    _, container_id, name = key.split('_', 2)
+                    path, branch = value.split(':')
+                    submodules_by_container[container_id].append(Submodule(path=path, branch=branch))
+                except ValueError:
+                    logging.warning(f"Invalid legacy submodule configuration: {key}={value}")
+        
+        # Create container objects
+        default_repos_dir = os.environ.get('REPOS_DIR', '/home/container/server-data')
+        for container_id, branch in container_configs.items():
+            workflow = 'main' if branch == 'main' else 'dev'
+            container = Container(
+                id=container_id,
+                name=container_id,  # Use ID as name for legacy configs
+                branch=branch,
+                workflow=workflow,
+                repos_dir=default_repos_dir,
+                submodules=submodules_by_container.get(container_id, [])
+            )
+            containers.append(container)
+        
+        return containers, workflows
+    
+    def get_workflow(self, workflow_name: str) -> Optional[Workflow]:
+        """Get workflow by name."""
+        return self.workflows.get(workflow_name)
+    
+    def get_container_by_id(self, container_id: str) -> Optional[Container]:
+        """Get container configuration by ID."""
+        for container in self.containers:
+            if container.id == container_id:
+                return container
+        return None
+    
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of errors."""
+        errors = []
+        
+        if not self.containers:
+            errors.append("No containers configured")
+        
+        for container in self.containers:
+            # Validate workflow exists
+            if container.workflow not in self.workflows:
+                errors.append(f"Container {container.id}: workflow '{container.workflow}' not found")
+            
+            # Validate container ID format (basic check)
+            if not container.id.strip():
+                errors.append(f"Container has empty ID")
+            
+            # Validate branch name
+            if not container.branch.strip():
+                errors.append(f"Container {container.id}: empty branch name")
+            
+            # Validate submodules
+            for submodule in container.submodules:
+                if not submodule.path.strip():
+                    errors.append(f"Container {container.id}: submodule has empty path")
+                if not submodule.branch.strip():
+                    errors.append(f"Container {container.id}: submodule {submodule.path} has empty branch")
+        
+        return errors
 
 # Initialize configuration
-config = Config.from_environment()
+config = Config.from_environment_and_file()
+
+# Validate configuration
+config_errors = config.validate()
+if config_errors:
+    print("Configuration errors found:")
+    for error in config_errors:
+        print(f"  - {error}")
+    exit(1)
 
 # Set up logging with configurable level
 log_file = os.path.join(config.current_dir, config.log_file)
@@ -105,11 +304,10 @@ class GitOperations:
     
     def run_docker_command(self, container: str, *args) -> subprocess.CompletedProcess:
         """Execute a command inside a Docker container."""
-        # Try to run as the container's default user first
         cmd = ["docker", "exec", container] + list(args)
         result = subprocess.run(cmd, capture_output=True, text=True)
         
-        # If there's an error and it contains ownership issues, 
+        # Handle ownership issues
         if (result.returncode != 0 and result.stderr and "dubious ownership" in result.stderr):
             
             logging.warning(f"ownership error detected, declaring as safe directory {container}")
@@ -180,7 +378,7 @@ class GitOperations:
     
     def commit(self, container: str, path: str, message: str = "Auto-commit by webhook") -> Tuple[bool, str]:
         """Commit changes in the repository."""
-        # First check if there are any changes to commit
+        # Check if there are changes to commit
         if not self.has_changes(container, path):
             return True, "No changes to commit"
         
@@ -219,14 +417,14 @@ class GitOperations:
 
     def reset_hard(self, container: str, path: str, branch: str) -> Tuple[bool, str]:
         """Reset repository to HEAD, discarding local changes and untracked files."""
-        # First reset to HEAD (discards staged and unstaged changes)
+        # Reset to HEAD (discards staged and unstaged changes)
         result_reset = self.run_docker_command(container, "git", "-C", path, "reset", "--hard", "origin/" + branch)
         if result_reset.returncode != 0:
             error_msg = f"Reset failed in container {container}: {result_reset.stderr}"
             logging.error(error_msg)
             return False, error_msg
         
-        # Then clean untracked files and directories
+        # Clean untracked files and directories
         result_clean = self.run_docker_command(container, "git", "-C", path, "clean", "-fd")
         if result_clean.returncode != 0:
             error_msg = f"Clean failed in container {container}: {result_clean.stderr}"
@@ -276,7 +474,7 @@ class GitHubValidator:
         """Extract the real IP address from request headers."""
         forwarded_for = request.headers.get('X-Forwarded-For')
         if forwarded_for:
-            # Take the second IP if multiple IPs are present (first is usually proxy)
+            # Use second IP if multiple present (first is usually proxy)
             ips = forwarded_for.split(', ')
             return ips[1] if len(ips) > 1 else ips[0]
         return request.headers.get('X-Real-IP', request.remote_addr)
@@ -318,123 +516,136 @@ class WebhookProcessor:
         self.config = config
         self.git_ops = GitOperations(config.repos_dir, config.git_user_name, config.git_user_email)
     
-    def process_dev_container(self, container: str, branch: str) -> Tuple[bool, str]:
-        """Process a development container with submodule handling."""
+    def process_container(self, container: Container) -> Tuple[bool, str]:
+        """Process a single container based on its workflow."""
         try:
-            # Handle submodules first
-            container_submodules = self.config.submodules.get(container, {})
-            for path, branch_sub in container_submodules.items():
-                full_path = os.path.join(self.config.repos_dir, path)
-                
-                # Check for changes in submodule
-                if not self.git_ops.has_changes(container, full_path):
-                    logging.info(f"{container}: No changes in {path}, only pulling")
-                    success, msg = self.git_ops.pull(container, full_path, branch_sub)
+            workflow = self.config.get_workflow(container.workflow)
+            if not workflow:
+                return False, f"Workflow '{container.workflow}' not found"
+            
+            logging.info(f"Processing container {container.name} ({container.id}) with workflow '{container.workflow}'")
+            
+            # Handle submodules first if workflow supports it
+            if workflow.submodule_update and container.submodules:
+                for submodule in container.submodules:
+                    success, msg = self._process_submodule(container, submodule, workflow)
                     if not success:
-                        return False, f"Submodule pull failed: {msg}"
-                    logging.info(f"{container}: Auto pull {path} successful")
-                    continue
-                
-                # Commit, pull, and push submodule changes
-                success, msg = self.git_ops.commit(container, full_path)
-                if not success:
-                    return False, f"Submodule commit failed: {msg}"
-                
-                # Log the commit result appropriately
-                if "No changes to commit" in msg:
-                    logging.info(f"{container}: {path} - {msg}")
-                else:
-                    logging.info(f"{container}: Auto commit {path} successful")
-                
-                success, msg = self.git_ops.pull(container, full_path, branch_sub)
-                if not success:
-                    return False, f"Submodule pull failed: {msg}"
-                logging.info(f"{container}: Auto pull {path} successful")
-                
-                # Checkout and merge for submodule
-                success, msg = self.git_ops.checkout_and_merge(container, full_path, branch_sub)
-                if success:
-                    success, msg = self.git_ops.push(container, full_path, branch_sub)
-                    if not success:
-                        return False, f"Submodule push failed: {msg}"
-                    logging.info(f"{container}: Auto push {path} successful")
+                        return False, f"Submodule {submodule.path} failed: {msg}"
             
-            # Update submodules to use newest commits
-            success, msg = self.git_ops.submodule_update(container, self.config.repos_dir, use_remote=True)
+            # Handle main repository workflow
+            success, msg = self._process_main_repo(container, workflow)
             if not success:
-                return False, f"Submodule update failed: {msg}"
+                return False, f"Main repo failed: {msg}"
             
-            # Commit, pull, and push main repository
-            success, msg = self.git_ops.commit(container, self.config.repos_dir)
-            if not success:
-                return False, f"Main repo commit failed: {msg}"
-            
-            # Log the commit result appropriately
-            if "No changes to commit" in msg:
-                logging.info(f"{container}: {msg}")
-            else:
-                logging.info(f"{container}: Auto commit successful")
-            
-            success, msg = self.git_ops.pull(container, self.config.repos_dir, branch)
-            if not success:
-                return False, f"Main repo pull failed: {msg}"
-            logging.info(f"{container}: Auto pull successful")
-            
-            success, msg = self.git_ops.push(container, self.config.repos_dir, branch)
-            if not success:
-                return False, f"Main repo push failed: {msg}"
-            logging.info(f"{container}: Auto push successful")
-            
-            return True, "Dev container processed successfully"
+            logging.info(f"Container {container.name} processed successfully")
+            return True, "Container processed successfully"
             
         except Exception as e:
-            error_msg = f"Error processing dev container {container}: {str(e)}"
+            error_msg = f"Error processing container {container.name}: {str(e)}"
             logging.error(error_msg)
             return False, error_msg
     
-    def process_main_container(self, container: str, branch: str) -> Tuple[bool, str]:
-        """Process a main/production container."""
-        try:
-            # Check for local changes and reset if necessary
-            if self.git_ops.has_changes(container, self.config.repos_dir):
-                success, msg = self.git_ops.reset_hard(container, self.config.repos_dir, branch)
-                if not success:
-                    return False, f"Reset failed: {msg}"
-                logging.info(f"{container}: Reset successful")
-            
-            # Pull latest changes
-            success, msg = self.git_ops.pull(container, self.config.repos_dir, branch)
+    def _process_submodule(self, container: Container, submodule: Submodule, workflow: Workflow) -> Tuple[bool, str]:
+        """Process a single submodule according to workflow."""
+        full_path = os.path.join(container.repos_dir, submodule.path)
+        
+        # Check if submodule has changes
+        has_changes = self.git_ops.has_changes(container.id, full_path)
+        
+        if not has_changes and not workflow.submodule_commit_push:
+            # No changes and no commit/push required, just pull
+            logging.info(f"{container.name}: No changes in {submodule.path}, only pulling")
+            success, msg = self.git_ops.pull(container.id, full_path, submodule.branch)
             if not success:
-                return False, f"Pull failed: {msg}"
-            logging.info(f"{container}: Git pull successful")
+                return False, msg
+            logging.info(f"{container.name}: Pull successful for {submodule.path}")
+            return True, "Submodule pulled successfully"
+        
+        # Handle submodule workflow
+        if workflow.commit and has_changes:
+            success, msg = self.git_ops.commit(container.id, full_path, self._get_commit_message())
+            if not success:
+                return False, msg
             
-            # Note: Submodule update is commented out in original code
-            # Uncomment if needed:
-            # success, msg = self.git_ops.submodule_update(container, self.config.repos_dir, use_remote=False)
-            # if not success:
-            #     return False, f"Submodule update failed: {msg}"
+            if "No changes to commit" in msg:
+                logging.info(f"{container.name}: {submodule.path} - {msg}")
+            else:
+                logging.info(f"{container.name}: Committed {submodule.path}")
+        
+        if workflow.pull:
+            success, msg = self.git_ops.pull(container.id, full_path, submodule.branch)
+            if not success:
+                return False, msg
+            logging.info(f"{container.name}: Pulled {submodule.path}")
+        
+        if workflow.push and workflow.submodule_commit_push:
+            # Checkout and merge for submodule push
+            success, msg = self.git_ops.checkout_and_merge(container.id, full_path, submodule.branch)
+            if success:
+                success, msg = self.git_ops.push(container.id, full_path, submodule.branch)
+                if not success:
+                    return False, msg
+                logging.info(f"{container.name}: Pushed {submodule.path}")
+        
+        return True, "Submodule processed successfully"
+    
+    def _process_main_repo(self, container: Container, workflow: Workflow) -> Tuple[bool, str]:
+        """Process the main repository according to workflow."""
+        # Check for local changes and reset if workflow requires it
+        if workflow.reset_on_changes and self.git_ops.has_changes(container.id, container.repos_dir):
+            success, msg = self.git_ops.reset_hard(container.id, container.repos_dir, container.branch)
+            if not success:
+                return False, msg
+            logging.info(f"{container.name}: Reset successful")
+        
+        # Update submodules to use newest commits if enabled
+        if workflow.submodule_update and container.submodules:
+            success, msg = self.git_ops.submodule_update(container.id, container.repos_dir, workflow.submodule_remote)
+            if not success:
+                return False, msg
+        
+        # Commit changes if workflow allows
+        if workflow.commit:
+            success, msg = self.git_ops.commit(container.id, container.repos_dir, self._get_commit_message())
+            if not success:
+                return False, msg
             
-            logging.info(f"{container}: Main container processed successfully")
-            return True, "Main container processed successfully"
-            
-        except Exception as e:
-            error_msg = f"Error processing main container {container}: {str(e)}"
-            logging.error(error_msg)
-            return False, error_msg
+            if "No changes to commit" in msg:
+                logging.info(f"{container.name}: {msg}")
+            else:
+                logging.info(f"{container.name}: Main repo committed")
+        
+        # Pull latest changes if workflow allows
+        if workflow.pull:
+            success, msg = self.git_ops.pull(container.id, container.repos_dir, container.branch)
+            if not success:
+                return False, msg
+            logging.info(f"{container.name}: Main repo pulled")
+        
+        # Push changes if workflow allows
+        if workflow.push:
+            success, msg = self.git_ops.push(container.id, container.repos_dir, container.branch)
+            if not success:
+                return False, msg
+            logging.info(f"{container.name}: Main repo pushed")
+        
+        return True, "Main repository processed successfully"
+    
+    def _get_commit_message(self) -> str:
+        """Generate commit message from template."""
+        template = self.config.commit_message_template
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return template.replace("{timestamp}", timestamp)
     
     def process_all_containers(self) -> Tuple[bool, str]:
         """Process all configured containers."""
-        for container, branch in self.config.containers.items():
-            if branch == "dev":
-                success, msg = self.process_dev_container(container, branch)
-                if not success:
-                    return False, f"Container {container}: {msg}"
-            elif branch == "main":
-                success, msg = self.process_main_container(container, branch)
-                if not success:
-                    return False, f"Container {container}: {msg}"
-            else:
-                logging.warning(f"Unknown branch '{branch}' for container {container}")
+        if not self.config.containers:
+            return False, "No containers configured"
+        
+        for container in self.config.containers:
+            success, msg = self.process_container(container)
+            if not success:
+                return False, f"Container {container.name}: {msg}"
         
         return True, "All containers processed successfully"
 
@@ -516,16 +727,31 @@ def health_check():
     if not config.health_check_enabled:
         return jsonify({"error": "Health check endpoint is disabled"}), 404
     
+    total_submodules = sum(len(container.submodules) for container in config.containers)
+    container_summary = {}
+    for container in config.containers:
+        workflow = config.get_workflow(container.workflow)
+        container_summary[container.id] = {
+            "name": container.name,
+            "branch": container.branch,
+            "workflow": container.workflow,
+            "workflow_description": workflow.description if workflow else "Unknown workflow",
+            "submodules": len(container.submodules)
+        }
+    
     return jsonify({
         "status": "healthy",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "containers": len(config.containers),
-        "submodules": sum(len(subs) for subs in config.submodules.values()),
+        "submodules": total_submodules,
+        "workflows": len(config.workflows),
+        "container_details": container_summary,
         "config": {
             "repos_dir": config.repos_dir,
             "log_level": config.log_level,
             "github_api_timeout": config.github_api_timeout,
-            "git_user": f"{config.git_user_name} <{config.git_user_email}>"
+            "git_user": f"{config.git_user_name} <{config.git_user_email}>",
+            "config_file": config.config_file
         }
     }), 200
 
@@ -545,8 +771,10 @@ def internal_error(error):
 
 if __name__ == "__main__":
     logging.info("Starting Git Webhook Server")
-    logging.info(f"Configured containers: {list(config.containers.keys())}")
+    container_names = [f"{c.name} ({c.id})" for c in config.containers]
+    logging.info(f"Configured containers: {container_names}")
     logging.info(f"Repository directory: {config.repos_dir}")
     logging.info(f"Git user: {config.git_user_name} <{config.git_user_email}>")
     logging.info(f"Health check endpoint: {'enabled' if config.health_check_enabled else 'disabled'}")
+    logging.info(f"Configuration file: {config.config_file}")
     app.run(host=config.flask_host, port=config.flask_port, debug=config.flask_debug)

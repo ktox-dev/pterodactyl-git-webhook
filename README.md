@@ -2,7 +2,7 @@
 
 A robust Flask-based webhook server that automatically synchronizes Git repositories within Docker containers when GitHub webhooks are received. Designed specifically for Pterodactyl game server management with support for both development and production workflows.
 
-## 🚀 Features
+## Features
 
 - **Multi-Container Support**: Manage multiple Docker containers with different Git workflows
 - **Branch-Specific Workflows**: Different handling for `main` (production) and `dev` (development) branches
@@ -13,14 +13,14 @@ A robust Flask-based webhook server that automatically synchronizes Git reposito
 - **Git User Management**: Automatic Git user configuration to prevent commit errors
 - **Comprehensive Logging**: Detailed logging with configurable levels
 
-## 📋 Prerequisites
+## Prerequisites
 
 - Python 3.8+
 - Docker (for container operations)
 - Git repositories with webhook access
 - Traefik (for reverse proxy, optional)
 
-## 🛠️ Installation
+## Installation
 
 ### 1. Clone and Setup
 
@@ -112,7 +112,7 @@ sudo systemctl start git-webhook.service
 sudo systemctl status git-webhook.service
 ```
 
-## 🌐 Traefik Configuration
+## Traefik Configuration
 
 Add to your Traefik dynamic configuration (`config.yaml`):
 
@@ -144,7 +144,7 @@ http:
           X-Forwarded-For: "{CF-Connecting-IP}"
 ```
 
-## 📊 API Endpoints
+## API Endpoints
 
 ### Webhook Endpoint
 - **URL**: `POST /webhook`
@@ -174,7 +174,7 @@ Example health response:
 }
 ```
 
-## ⚙️ Workflow Types
+## Workflow Types
 
 ### Main Branch (Production)
 - **Reset**: Discards local changes
@@ -187,7 +187,7 @@ Example health response:
 - **Main Repo**: Commits, pulls, and pushes main repository changes
 - **Full Workflow**: Complete development cycle automation
 
-## 🔧 Configuration Reference
+## Configuration Reference
 
 ### Environment Variables
 
@@ -216,7 +216,7 @@ Format: `SUBMODULE_<container-id>_<name>=<path>:<branch>`
 - `path`: Relative path from REPOS_DIR
 - `branch`: Git branch for the submodule
 
-## 📝 Logging
+## Logging
 
 Logs are written to `webhook.log` in the application directory. Log levels:
 - **INFO**: Normal operations, container processing
@@ -232,14 +232,14 @@ tail -f /home/docker/pterodactyl-git-webhook/webhook.log
 sudo journalctl -u git-webhook.service -f
 ```
 
-## 🔒 Security Features
+## Security Features
 
 - **GitHub IP Validation**: Only accepts webhooks from GitHub's IP ranges
 - **Auto-commit Detection**: Prevents infinite loops from webhook-generated commits
 - **Error Handling**: Comprehensive error handling with appropriate HTTP status codes
 - **Health Check Control**: Optional health endpoint can be disabled for security
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -269,7 +269,7 @@ LOG_LEVEL=DEBUG
 FLASK_DEBUG=true
 ```
 
-## 📚 Development
+## Development
 
 ### Architecture
 - **Config Class**: Environment-based configuration management
@@ -291,20 +291,4 @@ curl -X POST http://localhost:5000/webhook \
   -H "X-GitHub-Event: push" \
   -d '{"head_commit": {"message": "test commit"}}'
 ```
-
-## 📄 License
-
-[Add your license information here]
-
-## 🤝 Contributing
-
-[Add contribution guidelines here]
-
-## 📞 Support
-
-For issues and questions:
-- Check the logs first
-- Review configuration settings
-- Verify container and repository access
-- [Add your support contact information]
 
