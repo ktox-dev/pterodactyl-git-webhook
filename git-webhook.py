@@ -84,50 +84,84 @@ class Config:
         if os.path.exists(config_path):
             try:
                 with open(config_path, 'r') as f:
-                    yaml_config = yaml.safe_load(f) or {}
+                    content = f.read().strip()
+                    if not content:
+                        logging.warning(f"YAML config file {config_path} is empty, using environment variables")
+                        containers, workflows = cls._load_legacy_env_config()
+                    else:
+                        yaml_config = yaml.safe_load(content)
+                        
+                        # Handle empty or None YAML file
+                        if yaml_config is None:
+                            logging.warning(f"YAML config file {config_path} contains no valid YAML, using environment variables")
+                            containers, workflows = cls._load_legacy_env_config()
+                        else:
+                            # Load workflows
+                            yaml_workflows = yaml_config.get('workflows', {})
+                            if yaml_workflows is None:
+                                yaml_workflows = {}
+                            
+                            for name, workflow_data in yaml_workflows.items():
+                                if workflow_data is None:
+                                    workflow_data = {}
+                                workflows[name] = Workflow(
+                                    description=workflow_data.get('description', ''),
+                                    reset_on_changes=workflow_data.get('reset_on_changes', False),
+                                    pull=workflow_data.get('pull', True),
+                                    commit=workflow_data.get('commit', False),
+                                    push=workflow_data.get('push', False),
+                                    submodule_update=workflow_data.get('submodule_update', True),
+                                    submodule_remote=workflow_data.get('submodule_remote', False),
+                                    submodule_commit_push=workflow_data.get('submodule_commit_push', False)
+                                )
+                            
+                            # Load containers
+                            yaml_containers = yaml_config.get('containers', [])
+                            if yaml_containers is None:
+                                yaml_containers = []
+                            
+                            for container_data in yaml_containers:
+                                if container_data is None:
+                                    continue
+                                
+                                submodules = []
+                                submodule_list = container_data.get('submodules', [])
+                                if submodule_list is None:
+                                    submodule_list = []
+                                
+                                for sub_data in submodule_list:
+                                    if sub_data is None:
+                                        continue
+                                    submodules.append(Submodule(
+                                        path=sub_data.get('path', ''),
+                                        branch=sub_data.get('branch', '')
+                                    ))
+                                
+                                container = Container(
+                                    id=container_data.get('id', ''),
+                                    name=container_data.get('name', container_data.get('id', '')),
+                                    branch=container_data.get('branch', ''),
+                                    workflow=container_data.get('workflow', ''),
+                                    repos_dir=container_data.get('repos_dir', default_repos_dir),
+                                    submodules=submodules
+                                )
+                                containers.append(container)
+                            
+                            # Load global settings from YAML
+                            yaml_settings = yaml_config.get('settings', {})
+                            if yaml_settings is None:
+                                yaml_settings = {}
+                                
+                            if 'default_repos_dir' in yaml_settings:
+                                default_repos_dir = yaml_settings['default_repos_dir']
+                            
+                            logging.info(f"Loaded configuration from {config_path}")
+                            logging.info(f"Found {len(containers)} containers and {len(workflows)} workflows")
                 
-                # Load workflows
-                yaml_workflows = yaml_config.get('workflows', {})
-                for name, workflow_data in yaml_workflows.items():
-                    workflows[name] = Workflow(
-                        description=workflow_data.get('description', ''),
-                        reset_on_changes=workflow_data.get('reset_on_changes', False),
-                        pull=workflow_data.get('pull', True),
-                        commit=workflow_data.get('commit', False),
-                        push=workflow_data.get('push', False),
-                        submodule_update=workflow_data.get('submodule_update', True),
-                        submodule_remote=workflow_data.get('submodule_remote', False),
-                        submodule_commit_push=workflow_data.get('submodule_commit_push', False)
-                    )
-                
-                # Load containers
-                yaml_containers = yaml_config.get('containers', [])
-                for container_data in yaml_containers:
-                    submodules = []
-                    for sub_data in container_data.get('submodules', []):
-                        submodules.append(Submodule(
-                            path=sub_data['path'],
-                            branch=sub_data['branch']
-                        ))
-                    
-                    container = Container(
-                        id=container_data['id'],
-                        name=container_data.get('name', container_data['id']),
-                        branch=container_data['branch'],
-                        workflow=container_data['workflow'],
-                        repos_dir=container_data.get('repos_dir', default_repos_dir),
-                        submodules=submodules
-                    )
-                    containers.append(container)
-                
-                # Load global settings from YAML
-                yaml_settings = yaml_config.get('settings', {})
-                if 'default_repos_dir' in yaml_settings:
-                    default_repos_dir = yaml_settings['default_repos_dir']
-                
-                logging.info(f"Loaded configuration from {config_path}")
-                logging.info(f"Found {len(containers)} containers and {len(workflows)} workflows")
-                
+            except yaml.YAMLError as e:
+                logging.error(f"YAML parsing error in {config_path}: {e}")
+                logging.info("Falling back to environment variable configuration")
+                containers, workflows = cls._load_legacy_env_config()
             except Exception as e:
                 logging.warning(f"Failed to load YAML config from {config_path}: {e}")
                 logging.info("Falling back to environment variable configuration")
