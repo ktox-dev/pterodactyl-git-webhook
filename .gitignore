@@ -1,4 +1,25 @@
+# Virtual environment
 /venv
-webhook.log
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Configuration files
 .env
 config.yaml
+
+# Log files
+webhook.log
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

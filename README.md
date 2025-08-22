@@ -1,294 +1,203 @@
 # Git Webhook Server for Pterodactyl
 
-A robust Flask-based webhook server that automatically synchronizes Git repositories within Docker containers when GitHub webhooks are received. Designed specifically for Pterodactyl game server management with support for both development and production workflows.
+Automatically sync Git repositories in Docker containers when GitHub webhooks are received. Built for Pterodactyl game servers with support for multiple environments and submodules.
 
 ## Features
 
-- **Multi-Container Support**: Manage multiple Docker containers with different Git workflows
-- **Branch-Specific Workflows**: Different handling for `main` (production) and `dev` (development) branches
-- **Submodule Management**: Automatic submodule synchronization with configurable branches
-- **Security**: GitHub IP validation and auto-commit loop prevention
-- **Flexible Configuration**: Environment-based configuration with sensible defaults
-- **Health Monitoring**: Optional health check endpoint for monitoring
-- **Git User Management**: Automatic Git user configuration to prevent commit errors
-- **Comprehensive Logging**: Detailed logging with configurable levels
+- Multi-container support with YAML or environment configuration
+- Different workflows for production/development branches
+- Automatic submodule management
+- GitHub webhook validation and security
+- Health monitoring endpoint
+- File-based logging
 
-## Prerequisites
+## Quick Start
 
-- Python 3.8+
-- Docker (for container operations)
-- Git repositories with webhook access
-- Traefik (for reverse proxy, optional)
-
-## Installation
-
-### 1. Clone and Setup
-
+1. **Install dependencies**
 ```bash
-# Clone the repository
-git clone <your-repo-url> /home/docker/pterodactyl-git-webhook
-cd /home/docker/pterodactyl-git-webhook
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install flask python-dotenv requests
+pip install -r requirements.txt
 ```
 
-### 2. Configuration
-
-Copy and configure the environment file:
-
+2. **Configure**
 ```bash
-cp .env_example .env
+# Copy and edit configuration files
+cp config.yaml.example config.yaml
+cp .env.example .env
 ```
 
-Edit `.env` with your container and repository settings:
+3. **Run**
+```bash
+python git-webhook.py
+```
+
+The server will start on port 5000 and begin listening for GitHub webhooks.
+
+## Configuration
+
+### YAML Configuration (Recommended)
+
+First define your workflows, then assign containers to them:
+
+```yaml
+# Define workflows with their behavior
+workflows:
+  production:
+    description: "Production workflow - pull only, reset local changes"
+    reset_on_changes: true
+    pull: true
+    commit: false
+    push: false
+    submodule_update: true
+    submodule_remote: false
+    submodule_commit_push: false
+
+  development:
+    description: "Development workflow - full sync with commit and push"
+    reset_on_changes: false
+    pull: true
+    commit: true
+    push: true
+    submodule_update: true
+    submodule_remote: true
+    submodule_commit_push: true
+
+# Configure your containers
+containers:
+  - id: "your-container-id"
+    name: "prod-server"
+    branch: "main"
+    workflow: "production"
+    repos_dir: "/home/container/server-data"
+    submodules:
+      - path: "resources/[VL_Scripts]/[Cars]"
+        branch: "main"
+      - path: "resources/[VL_Scripts]/[Core]"
+        branch: "main"
+
+  - id: "another-container-id"
+    name: "dev-server"
+    branch: "dev"
+    workflow: "development"
+    repos_dir: "/home/container/server-data"
+    submodules:
+      - path: "resources/[VL_Scripts]/[Cars]"
+        branch: "dev"
+```
+
+**How it works:**
+- Define workflows with specific Git operation behaviors
+- Assign containers to workflows based on their purpose
+- Each container can have its own branch and submodule configuration
+
+### Environment Variables
+
+Global settings in `.env`:
 
 ```bash
-# Repository directory inside containers
+# Repository path inside Docker containers (fallback for YAML configs)
 REPOS_DIR=/home/container/server-data
 
-# Container configuration (format: CONTAINER_<id>=<branch>)
-CONTAINER_e4c77c95-3ebe-4d03-8e8f-18c63a662d8f=main
-CONTAINER_4906c456-74fd-4d02-b458-e17ae8026ba4=dev
+# Git configuration
+GIT_USER_NAME=Git Webhook Bot
+GIT_USER_EMAIL=webhook@example.com
 
-# Submodule configuration (format: SUBMODULE_<container-id>_<name>=<path>:<branch>)
-SUBMODULE_4906c456-74fd-4d02-b458-e17ae8026ba4_CARS=resources/[VL_Scripts]/[Cars]:dev
-
-# Git user configuration
-GIT_USER_NAME=Pterodactyl Webhook Bot
-GIT_USER_EMAIL=webhook@yourdomain.com
-
-# Optional: Server configuration
+# Flask server settings
 FLASK_HOST=0.0.0.0
 FLASK_PORT=5000
+FLASK_DEBUG=false
+
+# Logging
 LOG_LEVEL=INFO
+LOG_FILE=webhook.log
+
+# Advanced settings
+GITHUB_API_TIMEOUT=10
+MAX_CONCURRENT_CONTAINERS=5
+CONTAINER_TIMEOUT=300
 HEALTH_CHECK_ENABLED=true
+COMMIT_MESSAGE_TEMPLATE=Auto-commit by webhook: {timestamp}
 ```
 
-### 3. Systemd Service Setup
+### Legacy Environment Config
 
-Create the systemd service file:
+Still supported for simple setups (deprecated - use YAML instead):
+```bash
+# Container format: CONTAINER_<container-id>=<branch>
+CONTAINER_34bee3f5-fb2b-4bab-b45e-c303b1d15137=main
+
+# Submodule format: SUBMODULE_<container-id>_<name>=<path>:<branch>
+SUBMODULE_34bee3f5-fb2b-4bab-b45e-c303b1d15137_CARS=resources/[VL_Scripts]/[Cars]:main
+```
+
+## Systemd Service
 
 ```bash
 sudo nano /etc/systemd/system/git-webhook.service
 ```
 
-Add the following content:
-
 ```ini
 [Unit]
-Description=Git Webhook Server for Pterodactyl
+Description=Git Webhook Server
 After=network.target
-Wants=network.target
 
 [Service]
 Type=simple
 User=docker
-Group=docker
-WorkingDirectory=/home/docker/pterodactyl-git-webhook
-ExecStart=/home/docker/pterodactyl-git-webhook/venv/bin/python3 /home/docker/pterodactyl-git-webhook/git-webhook.py
+WorkingDirectory=/path/to/pterodactyl-git-webhook
+ExecStart=/path/to/venv/bin/python git-webhook.py
 Restart=always
-RestartSec=5
-Environment=PATH=/home/docker/pterodactyl-git-webhook/venv/bin
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Enable and start the service:
-
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable git-webhook.service
-sudo systemctl start git-webhook.service
-
-# Check status
-sudo systemctl status git-webhook.service
-```
-
-## Traefik Configuration
-
-Add to your Traefik dynamic configuration (`config.yaml`):
-
-```yaml
-http:
-  routers:
-    git-webhook:
-      entryPoints:
-        - "websecure"
-      tls:
-        certResolver: "cloudflare"
-      rule: "Host(`git-webhook.yourdomain.com`)"
-      service: "git-webhook"
-      # Optional: Add middleware for security
-      middlewares:
-        - "real-ip"
-  
-  services:
-    git-webhook:
-      loadBalancer:
-        servers:
-          - url: "http://172.18.0.1:5000"  # Adjust to your host IP
-
-  middlewares:
-    real-ip:
-      headers:
-        customRequestHeaders:
-          X-Real-IP: "{CF-Connecting-IP}"
-          X-Forwarded-For: "{CF-Connecting-IP}"
+sudo systemctl enable --now git-webhook.service
 ```
 
 ## API Endpoints
 
-### Webhook Endpoint
-- **URL**: `POST /webhook`
-- **Purpose**: Receives GitHub webhook payloads
-- **Authentication**: GitHub IP validation
-- **Response**: JSON with operation status
+- `POST /webhook` - Receives GitHub webhooks (validates GitHub IPs)
+- `GET /health` - Health check and configuration status
 
-### Health Check Endpoint
-- **URL**: `GET /health`
-- **Purpose**: Service health and configuration status
-- **Response**: JSON with system information
-- **Configurable**: Can be disabled via `HEALTH_CHECK_ENABLED=false`
+## How it Works
 
-Example health response:
-```json
-{
-    "status": "healthy",
-    "version": "2.0.0",
-    "containers": 2,
-    "submodules": 1,
-    "config": {
-        "repos_dir": "/home/container/server-data",
-        "log_level": "INFO",
-        "github_api_timeout": 10,
-        "git_user": "Pterodactyl Webhook Bot <webhook@yourdomain.com>"
-    }
-}
-```
+**Main branch**: Resets local changes and pulls latest (production workflow)
+**Dev branch**: Commits changes, pulls, pushes (full development workflow)
 
-## Workflow Types
+Submodules are handled automatically based on your configuration. The server validates that webhooks come from GitHub's official IP ranges for security.
 
-### Main Branch (Production)
-- **Reset**: Discards local changes
-- **Pull**: Updates to latest remote changes
-- **No Commits**: Read-only workflow for production stability
-
-### Dev Branch (Development)
-- **Submodule Processing**: Commits, pulls, and pushes submodule changes
-- **Submodule Updates**: Syncs to latest remote commits
-- **Main Repo**: Commits, pulls, and pushes main repository changes
-- **Full Workflow**: Complete development cycle automation
-
-## Configuration Reference
-
-### Environment Variables
+## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REPOS_DIR` | `/home/container/server-data` | Repository directory in containers |
-| `FLASK_HOST` | `0.0.0.0` | Flask server bind address |
-| `FLASK_PORT` | `5000` | Flask server port |
+| `CONFIG_FILE` | `config.yaml` | Path to YAML configuration |
+| `REPOS_DIR` | `/home/container/server-data` | Default repository path (fallback for YAML containers) |
+| `FLASK_HOST` | `0.0.0.0` | Server bind address |
+| `FLASK_PORT` | `5000` | Server port |
 | `FLASK_DEBUG` | `false` | Enable Flask debug mode |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
-| `LOG_FILE` | `webhook.log` | Log file name |
-| `GITHUB_API_TIMEOUT` | `10` | GitHub API request timeout (seconds) |
-| `GIT_USER_NAME` | `Git Webhook Bot` | Git commit author name |
-| `GIT_USER_EMAIL` | `webhook@example.com` | Git commit author email |
-| `HEALTH_CHECK_ENABLED` | `true` | Enable/disable health endpoint |
-
-### Container Configuration
-Format: `CONTAINER_<container-id>=<branch>`
-- `container-id`: Docker container name or ID
-- `branch`: Either `main` or `dev`
-
-### Submodule Configuration
-Format: `SUBMODULE_<container-id>_<name>=<path>:<branch>`
-- `container-id`: Must match a configured container
-- `name`: Unique identifier for the submodule
-- `path`: Relative path from REPOS_DIR
-- `branch`: Git branch for the submodule
-
-## Logging
-
-Logs are written to `webhook.log` in the application directory. Log levels:
-- **INFO**: Normal operations, container processing
-- **WARNING**: Non-critical issues (e.g., submodule configuration problems)
-- **ERROR**: Critical failures, container processing errors
-
-View logs:
-```bash
-# Real-time log monitoring
-tail -f /home/docker/pterodactyl-git-webhook/webhook.log
-
-# Service logs
-sudo journalctl -u git-webhook.service -f
-```
-
-## Security Features
-
-- **GitHub IP Validation**: Only accepts webhooks from GitHub's IP ranges
-- **Auto-commit Detection**: Prevents infinite loops from webhook-generated commits
-- **Error Handling**: Comprehensive error handling with appropriate HTTP status codes
-- **Health Check Control**: Optional health endpoint can be disabled for security
+| `LOG_FILE` | `webhook.log` | Log file path |
+| `GIT_USER_NAME` | `Git Webhook Bot` | Git commit author |
+| `GIT_USER_EMAIL` | `webhook@example.com` | Git commit email |
+| `GITHUB_API_TIMEOUT` | `10` | GitHub API timeout in seconds |
+| `MAX_CONCURRENT_CONTAINERS` | `5` | Max concurrent container operations |
+| `CONTAINER_TIMEOUT` | `300` | Container operation timeout in seconds |
+| `HEALTH_CHECK_ENABLED` | `true` | Enable health endpoint |
+| `COMMIT_MESSAGE_TEMPLATE` | `Auto-commit by webhook: {timestamp}` | Git commit message template |
 
 ## Troubleshooting
 
-### Common Issues
+**Container not found**: Check `docker ps` and verify container IDs in config
+**Git errors**: Set `GIT_USER_NAME` and `GIT_USER_EMAIL` in `.env`
+**Webhook not received**: Check GitHub webhook settings, firewall, and Traefik config
+**YAML errors**: Validate syntax with `python -c "import yaml; yaml.safe_load(open('config.yaml'))"`
 
-1. **"Author identity unknown" errors**
-   - Ensure `GIT_USER_NAME` and `GIT_USER_EMAIL` are set in `.env`
+Enable debug logging: `LOG_LEVEL=DEBUG`
 
-2. **Container not found**
-   - Verify container IDs/names in configuration
-   - Check if containers are running: `docker ps`
+View logs: `tail -f webhook.log`
 
-3. **Webhook not received**
-   - Check GitHub webhook settings
-   - Verify Traefik routing configuration
-   - Check firewall settings
+## License
 
-4. **Submodule errors**
-   - Review submodule configuration in `.gitmodules`
-   - Ensure submodule repositories are accessible
-   - Check authentication for private repositories
-
-### Debug Mode
-
-Enable debug logging:
-```bash
-# In .env file
-LOG_LEVEL=DEBUG
-FLASK_DEBUG=true
-```
-
-## Development
-
-### Architecture
-- **Config Class**: Environment-based configuration management
-- **GitOperations Class**: Git command execution within containers
-- **GitHubValidator Class**: Webhook validation and security
-- **WebhookProcessor Class**: Main workflow orchestration
-
-### Testing
-
-Test the health endpoint:
-```bash
-curl https://git-webhook.yourdomain.com/health
-```
-
-Test webhook locally:
-```bash
-curl -X POST http://localhost:5000/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: push" \
-  -d '{"head_commit": {"message": "test commit"}}'
-```
+MIT License - see [LICENSE](LICENSE) file.
 

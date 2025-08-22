@@ -75,10 +75,3 @@ containers:
     submodules:
       - path: "resources/[VL_Scripts]/[Cars]"
         branch: "staging"
-
-# Global settings (can be overridden by environment variables)
-settings:
-  default_repos_dir: "/home/container/server-data"
-  commit_message_template: "Auto-commit by webhook: {timestamp}"
-  max_concurrent_containers: 5
-  container_timeout: 300

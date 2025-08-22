@@ -13,6 +13,10 @@ import threading
 from queue import Queue
 from datetime import datetime
 
+# Version information
+__version__ = "3.0.0"
+__author__ = "ktox-dev"
+
 # Load environment variables
 load_dotenv()
 
@@ -146,14 +150,6 @@ class Config:
                                     submodules=submodules
                                 )
                                 containers.append(container)
-                            
-                            # Load global settings from YAML
-                            yaml_settings = yaml_config.get('settings', {})
-                            if yaml_settings is None:
-                                yaml_settings = {}
-                                
-                            if 'default_repos_dir' in yaml_settings:
-                                default_repos_dir = yaml_settings['default_repos_dir']
                             
                             logging.info(f"Loaded configuration from {config_path}")
                             logging.info(f"Found {len(containers)} containers and {len(workflows)} workflows")
@@ -339,6 +335,15 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+
+# Security headers
+@app.after_request
+def security_headers(response):
+    """Add security headers to all responses."""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    return response
 
 class GitOperations:
     """Handles all Git operations within Docker containers."""
@@ -756,6 +761,11 @@ def webhook():
             logging.error("Invalid or missing payload")
             return jsonify({"error": "Invalid payload"}), 400
 
+        # Validate GitHub IP first for security
+        if not GitHubValidator.is_github_ip(real_ip, timeout=config.github_api_timeout):
+            logging.warning(f"Unauthorized webhook request from IP: {real_ip}")
+            return jsonify({"error": "Unauthorized"}), 403
+
         # Add the request to the queue
         request_queue.put((real_ip, payload))
         logging.info("Request added to the queue")
@@ -787,7 +797,7 @@ def health_check():
     
     return jsonify({
         "status": "healthy",
-        "version": "3.0.0",
+        "version": __version__,
         "containers": len(config.containers),
         "submodules": total_submodules,
         "workflows": len(config.workflows),
