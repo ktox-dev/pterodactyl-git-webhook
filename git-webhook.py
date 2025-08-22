@@ -306,6 +306,12 @@ class Config:
         
         return errors
 
+# Set up basic logging first (will be reconfigured after config load)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s'
+)
+
 # Initialize configuration
 config = Config.from_environment_and_file()
 
@@ -317,13 +323,19 @@ if config_errors:
         print(f"  - {error}")
     exit(1)
 
-# Set up logging with configurable level
+# Reconfigure logging with proper file and level from config
 log_file = os.path.join(config.current_dir, config.log_file)
 log_level = getattr(logging, config.log_level, logging.INFO)
+
+# Clear any existing handlers and reconfigure
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
 logging.basicConfig(
     filename=log_file, 
     level=log_level, 
-    format='%(asctime)s %(levelname)s: %(message)s'
+    format='%(asctime)s %(levelname)s: %(message)s',
+    force=True
 )
 
 app = Flask(__name__)
